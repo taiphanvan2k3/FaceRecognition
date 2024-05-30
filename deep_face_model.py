@@ -1,12 +1,24 @@
 from deepface import DeepFace
-import os
+import os, time
 
+os.environ["TF_ENABLE_ONEDNN_OPTS"] = "0"
 model_name = "Facenet"
 
 
+def preload_and_warmup():
+    print("Loading model and performing warm-up...")
+    start_time = time.time()
+
+    # Thực hiện phân tích với một ảnh mẫu để làm nóng mô hình
+    dummy_image_path = "test/dataset/tai.png"  # Đường dẫn tới ảnh mẫu
+    DeepFace.analyze(dummy_image_path, actions=["emotion"])
+    print("Warm-up completed in:", time.time() - start_time, "seconds")
+
+
 def preload_model():
-    DeepFace.build_model("Emotion")
+    print("Loading model and performing warm-up...")
     DeepFace.build_model(model_name)
+    preload_and_warmup()
 
 
 def detect_is_same_person(prev_img_path, smile_img_path):
