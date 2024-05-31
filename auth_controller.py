@@ -46,11 +46,12 @@ def authentication_stage(temp_file_name, user_id, retry_count=0):
                 "file_path": temp_file_name,
                 "status": "authorized" if is_authorized else "unauthorized",
                 "retry_count": retry_count if is_authorized else retry_count + 1,
-            }
+            },
+            200 if is_authorized else 401,
         )
     except Exception as e:
         delete_folder(os.path.dirname(temp_file_name))
-        return jsonify({"status": "unauthorized", "error": str(e)})
+        return jsonify({"status": "unauthorized", "error": str(e)}), 401
 
 
 def smiling_stage(prev_file_path, current_file, retry_count=0):
@@ -85,14 +86,14 @@ def smiling_stage(prev_file_path, current_file, retry_count=0):
 
         if retry_count == 3 and not is_smiling:
             delete_folder(folder_path)
-            return jsonify({"status": "unauthorized"})
+            return jsonify({"status": "unauthorized"}), 401
 
         return jsonify(
             {
                 "status": ("smiling" if is_smiling else "not smiling"),
                 "retry_count": retry_count if is_smiling else retry_count + 1,
             }
-        )
+        ), (200 if is_smiling else 401)
 
 
 @auth_bp.route("/verify", methods=["POST"])
