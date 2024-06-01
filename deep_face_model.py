@@ -28,7 +28,7 @@ def detect_is_same_person(prev_img_path, smile_img_path):
         model_name=model_name,
         distance_metric="euclidean_l2",
     )
-    return result["distance"] <= 0.4
+    return result["distance"] <= 0.5
 
 
 def check_is_smile(img_path):
@@ -48,6 +48,7 @@ def verify_image(img_path, db_path):
         db_path=db_path,
         model_name=model_name,
         distance_metric="euclidean_l2",
+        threshold=0.5
     )
     if result[0].shape[0] == 0:
         return False
