@@ -1,25 +1,13 @@
 from flask import Blueprint, Flask, request, jsonify
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.triggers.cron import CronTrigger
-from flask_sqlalchemy import SQLAlchemy
 import atexit, requests
+from firebase_util import initialize_firestore
 
 app = Flask(__name__)
 
-# Cấu hình SQLAlchemy cho SQLite database
-app.config["SQLALCHEMY_DATABASE_URI"] = "sqlite:///tasks.db"
-db = SQLAlchemy(app)
-
-schedule_job_bp = Blueprint("schedule_job", __name__)
-
-
-# Định nghĩa model Task để lưu thông tin nhiệm vụ
-class Task(db.Model):
-    id = db.Column(db.String(100), primary_key=True)
-    action = db.Column(db.String(120), nullable=False)
-    hour = db.Column(db.Integer, nullable=False)  # Giờ cần chạy nhiệm vụ
-    minute = db.Column(db.Integer, nullable=False)  # Phút cần chạy nhiệm vụ
-
+firebase_db = initialize_firestore()
+scheduled_jobs_collection = firebase_db.collection("ScheduledJobs")
 
 # Khởi tạo BackgroundScheduler
 scheduler = BackgroundScheduler()
@@ -28,21 +16,27 @@ scheduler.start()
 # Đảm bảo scheduler dừng khi ứng dụng Flask dừng
 atexit.register(lambda: scheduler.shutdown())
 
-# Load các tasks đã lưu trong DB mỗi khi run lại server
 is_loaded_stored_tasks = False
+schedule_job_bp = Blueprint("schedule_job", __name__)
 
 
+# Load các tasks đã lưu trong DB mỗi khi run lại server
 def load_tasks():
     with app.app_context():
         global is_loaded_stored_tasks
         if is_loaded_stored_tasks:
             return
-        tasks = Task.query.all()
+        tasks = firebase_db.collection("ScheduledJobs").get()
         for task in tasks:
+            task_data = task.to_dict()
             scheduler.add_job(
                 func=scheduled_task,
                 trigger=CronTrigger(
-                    hour=task.hour, minute=task.minute, day="*", month="*", year="*"
+                    hour=task_data.get("hour"),
+                    minute=task_data.get("minute"),
+                    day="*",
+                    month="*",
+                    year="*",
                 ),
                 args=[task.id],
                 id=task.id,
@@ -53,21 +47,22 @@ def load_tasks():
 # Hàm nhiệm vụ bạn muốn chạy theo lịch
 def scheduled_task(task_id):
     with app.app_context():
-        task = Task.query.get(task_id)
+        task = scheduled_jobs_collection.document(task_id).get().to_dict()
         if task:
-            print("Running task", task.action)
+            task_action = task.get("action")
+            print("Running task", task_action)
             base_url = (
                 "http://localhost:9999"  # Đảm bảo sử dụng URL của server Flask của bạn
             )
 
-            if task.action == "turn on led home":
+            if task_action == "turn on led home":
                 url = f"{base_url}/led?location=living-room&status=1"
-            elif task.action == "turn on led garden":
+            elif task_action == "turn on led garden":
                 url = f"{base_url}/led?location=garden&intensity=255"
-            elif task.action == "turn on fan":
+            elif task_action == "turn on fan":
                 url = f"{base_url}/fan?location=living-room&status=1"
             else:
-                print(f"Unknown task action: {task.action}")
+                print(f"Unknown task action: {task_action}")
                 return
 
             # Gửi yêu cầu HTTP
@@ -77,26 +72,29 @@ def scheduled_task(task_id):
 
 # Tạo bảng trong cơ sở dữ liệu và load tasks khi khởi động
 with app.app_context():
-    db.create_all()
+    # db.create_all()
     load_tasks()
 
 
 @schedule_job_bp.route("/schedule", methods=["POST"])
 def schedule_task():
     data = request.get_json()
-    user_id = data.get("user_id")
     action = data.get("action")
     hour = data.get("hour")
     minute = data.get("minute")
 
-    # Lưu nhiệm vụ vào cơ sở dữ liệu
-    task_id = f"{user_id}->{action}"
-    new_task = Task(id=task_id, hour=hour, minute=minute, action=action)
-    db.session.add(new_task)
-    db.session.commit()
+    # Lưu thông tin nhiệm vụ vào Firebase
+    new_scheduled_job = scheduled_jobs_collection.add(
+        {
+            "action": action,
+            "hour": hour,
+            "minute": minute,
+        }
+    )
+
+    task_id = new_scheduled_job[1].id
 
     # Thêm nhiệm vụ vào scheduler
-
     scheduler.add_job(
         func=scheduled_task,
         trigger=CronTrigger(
@@ -115,18 +113,21 @@ def schedule_task():
 @schedule_job_bp.route("/update-schedule", methods=["POST"])
 def update_schedule_job():
     data = request.get_json()
-    user_id = data.get("user_id")
-    action = data.get("action")
+    task_id = data.get("task_id")
     hour = data.get("hour")
     minute = data.get("minute")
 
-    task_id = f"{user_id}->{action}"
-    task = Task.query.get(task_id)
-    if task:
-        task.action = action
-        task.hour = hour
-        task.minute = minute
-        db.session.commit()
+    old_task_ref = scheduled_jobs_collection.document(task_id)
+    old_task = old_task_ref.get()
+
+    if old_task.exists:
+        # Cập nhật nhiệm vụ trong Firebase
+        old_task_ref.update(
+            {
+                "hour": hour,
+                "minute": minute,
+            }
+        )
 
         # Cập nhật lại nhiệm vụ trong scheduler
         scheduler.reschedule_job(
@@ -141,15 +142,8 @@ def update_schedule_job():
 
 @schedule_job_bp.route("/tasks", methods=["GET"])
 def get_tasks():
-    tasks = Task.query.all()
-    task_list = []
-    for task in tasks:
-        task_list.append(
-            {
-                "id": task.id,
-                "action": task.action,
-                "hour": task.hour,
-                "minute": task.minute,
-            }
-        )
-    return jsonify({"tasks": task_list}), 200
+    scheduled_jobs = scheduled_jobs_collection.get()
+    tasks = []
+    for job in scheduled_jobs:
+        tasks.append(job.to_dict())
+    return jsonify({"tasks": tasks}), 200
