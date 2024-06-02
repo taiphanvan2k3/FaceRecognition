@@ -2,7 +2,7 @@ from flask import Blueprint, jsonify, request
 import requests
 
 esp8266_bp = Blueprint("esp8266", __name__)
-ESP8266_ID = "http://192.168.11.52/"
+ESP8266_ID = "http://192.168.103.52/"
 
 
 @esp8266_bp.route("/check_esp", methods=["GET"])
