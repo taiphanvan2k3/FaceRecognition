@@ -1,7 +1,15 @@
 from flask import Blueprint, jsonify, request
-from datetime import datetime
+
 from deep_face_model import verify_image, detect_is_same_person, check_is_smile
-import os, shutil
+from firebase_util import upload_file_to_fire_storage
+from utils import (
+    create_thread_and_start,
+    delete_file,
+    create_temp_file_name,
+    create_folder_if_not_exists,
+    delete_folder,
+)
+import os
 
 auth_bp = Blueprint("auth", __name__)
 
@@ -11,36 +19,24 @@ def welcome():
     return jsonify({"message": "Hello, I am the auth service"})
 
 
-def create_temp_file_name():
-    # Lấy thời gian hiện tại
-    now = datetime.now()
-    timestamp_str = now.strftime("%Y%m%d%H%M%S")
-
-    return timestamp_str
-
-
-def create_folder_if_not_exists(folder_name):
-    if not os.path.exists(folder_name):
-        os.makedirs(folder_name)
+def save_image_to_firebase(user_id, stage, error_type, file_path):
+    create_thread_and_start(
+        upload_file_to_fire_storage,
+        (user_id, stage, error_type, file_path, "", "OpenDoorHistory", True),
+    )
 
 
-def delete_file(file_name):
-    os.remove(file_name)
-
-
-def delete_folder(folder_name):
-    if os.path.exists(folder_name) and os.path.isdir(folder_name):
-        shutil.rmtree(folder_name)
-        print(f"Folder '{folder_name}' has been deleted.")
-    else:
-        print(f"Folder '{folder_name}' does not exist or is not a directory.")
-
-
-def authentication_stage(temp_file_name, user_id, retry_count=0):
+def authentication_stage(user_id, temp_file_name, retry_count=0):
     try:
         is_authorized = verify_image(temp_file_name, user_id)
         if not is_authorized:
-            delete_file(temp_file_name)
+            if retry_count < 3:
+                folder_path = os.path.dirname(temp_file_name)
+                delete_folder(folder_path)
+            else:
+                save_image_to_firebase(
+                    user_id, "authentication", "is_authorized", temp_file_name
+                )
         return jsonify(
             {
                 "file_path": temp_file_name,
@@ -53,7 +49,7 @@ def authentication_stage(temp_file_name, user_id, retry_count=0):
         return jsonify({"status": "unauthorized", "error": str(e)}), 401
 
 
-def smiling_stage(prev_file_path, current_file, retry_count=0):
+def smiling_stage(user_id, prev_file_path, current_file, retry_count=0):
     """
     prev_file_path: Đường dẫn tới file đã lưu tại bước authentication
     """
@@ -68,22 +64,26 @@ def smiling_stage(prev_file_path, current_file, retry_count=0):
     is_same_person = detect_is_same_person(prev_file_path, temp_file_name)
     if not is_same_person:
         if retry_count < 3:
-            return (
-                jsonify({"status": "not same person", "retry_count": retry_count + 1})
+            return jsonify(
+                {"status": "not same person", "retry_count": retry_count + 1}
             )
         else:
-            delete_folder(folder_path)
+            save_image_to_firebase(
+                user_id, "smiling", "not same person", temp_file_name
+            )
             return jsonify({"status": "unauthorized"})
     else:
         # Nếu là cùng một người, kiểm tra xem người đó có mỉm cười không
         is_smiling = check_is_smile(temp_file_name)
         if is_smiling:
             delete_folder(folder_path)
-        else:
+        elif retry_count < 3:
             delete_file(temp_file_name)
 
         if retry_count == 3 and not is_smiling:
-            delete_folder(folder_path)
+            save_image_to_firebase(
+                user_id, "smiling", "not smiling", temp_file_name
+            )
             return jsonify({"status": "unauthorized"})
 
         return jsonify(
@@ -112,7 +112,7 @@ def verify():
         file.save(temp_file_name)
 
     if stage == "authentication":
-        return authentication_stage(temp_file_name, user_id, retry_count)
+        return authentication_stage(user_id, temp_file_name, retry_count)
     else:  # Check is smiling
         prev_file_path = request.form["prev_file_path"]
-        return smiling_stage(prev_file_path, file, retry_count=retry_count)
+        return smiling_stage(user_id, prev_file_path, file, retry_count=retry_count)
