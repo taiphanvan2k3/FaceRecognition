@@ -1,5 +1,5 @@
 from flask_cors import CORS
-from auth_controller import auth_bp 
+from auth_controller import auth_bp
 from ESP_controller import esp8266_bp
 from deep_face_model import preload_model
 from schedule_job_controller import (
