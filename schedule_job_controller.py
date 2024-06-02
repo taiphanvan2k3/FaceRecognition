@@ -29,18 +29,19 @@ def load_tasks():
         tasks = firebase_db.collection("ScheduledJobs").get()
         for task in tasks:
             task_data = task.to_dict()
-            scheduler.add_job(
-                func=scheduled_task,
-                trigger=CronTrigger(
-                    hour=task_data.get("hour"),
-                    minute=task_data.get("minute"),
-                    day="*",
-                    month="*",
-                    year="*",
-                ),
-                args=[task.id],
-                id=task.id,
-            )
+            if task_data.get("is_active"):
+                scheduler.add_job(
+                    func=scheduled_task,
+                    trigger=CronTrigger(
+                        hour=task_data.get("hour"),
+                        minute=task_data.get("minute"),
+                        day="*",
+                        month="*",
+                        year="*",
+                    ),
+                    args=[task.id],
+                    id=task.id,
+                )
         is_loaded_stored_tasks = True
 
 
@@ -89,6 +90,7 @@ def schedule_task():
             "action": action,
             "hour": hour,
             "minute": minute,
+            "is_active": 0,
         }
     )
 
@@ -116,6 +118,7 @@ def update_schedule_job():
     task_id = data.get("task_id")
     hour = data.get("hour")
     minute = data.get("minute")
+    is_active = int(data.get("is_active"))
 
     old_task_ref = scheduled_jobs_collection.document(task_id)
     old_task = old_task_ref.get()
@@ -126,14 +129,31 @@ def update_schedule_job():
             {
                 "hour": hour,
                 "minute": minute,
+                "is_active": is_active,
             }
         )
 
         # Cập nhật lại nhiệm vụ trong scheduler
-        scheduler.reschedule_job(
-            task_id,
-            trigger=CronTrigger(hour=hour, minute=minute, day="*", month="*", year="*"),
-        )
+        if is_active:
+            if scheduler.get_job(task_id):
+                scheduler.reschedule_job(
+                    task_id,
+                    trigger=CronTrigger(
+                        hour=hour, minute=minute, day="*", month="*", year="*"
+                    ),
+                )
+            else:
+                scheduler.add_job(
+                    func=scheduled_task,
+                    trigger=CronTrigger(
+                        hour=hour, minute=minute, day="*", month="*", year="*"
+                    ),
+                    args=[task_id],
+                    id=task_id,
+                )
+        else:
+            if scheduler.get_job(task_id):
+                scheduler.remove_job(task_id)
 
         return jsonify({"message": "Updated successfully!"}), 200
     else:
