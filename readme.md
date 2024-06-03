@@ -1,7 +1,7 @@
 ## <span style="color: rgb(14 179 207)">Smart Home</span>
 
 ### <span style="color: rgb(14 179 207)">Deep Face</span>
-<div style="text-align:center">
+<div align="center" style="text-align:center">
     <img src="./images/deep_face.png" width="30%" />
 </div>
 
